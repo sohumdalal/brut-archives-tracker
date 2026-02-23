@@ -85,7 +85,7 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
   // Cloudflare/Datadome returns an HTML page when blocking — detect and throw clearly
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
-    cookieJar = null; // force fresh cookie next attempt
+    // IP is rate-limited by Cloudflare — the cookie is still valid, don't reset it
     throw new Error(`Vinted returned non-JSON (${res.status}) — likely rate-limited`);
   }
 
