@@ -39,7 +39,8 @@ async function poll() {
     try {
       ({ items } = await search({ query, perPage: 96, maxPages: POLL_PAGES }));
     } catch (err) {
-      console.error(`[${ts()}] "${query}" failed:`, err.message);
+      // Rate-limited by Cloudflare/Datadome — log and skip this cycle, cron will retry
+      console.warn(`[${ts()}] "${query}" skipped: ${err.message}`);
       continue;
     }
 

@@ -21,16 +21,24 @@ function parseCookies(setCookieHeaders) {
     if (eq === -1) continue;
     const name = pair.slice(0, eq).trim();
     const value = pair.slice(eq + 1).trim();
-    if (value) jar[name] = value; // skip empty values (Vinted sends access_token_web twice, once empty)
+    if (value) jar[name] = value;
   }
   return jar;
 }
 
 async function fetchCookie() {
   const res = await fetch('https://www.vinted.fr', {
-    headers: { 'user-agent': USER_AGENT },
+    headers: {
+      'user-agent': USER_AGENT,
+      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+    },
     redirect: 'follow',
   });
+
+  if (!res.ok) {
+    throw new Error(`Vinted homepage returned ${res.status} — likely rate-limited by Cloudflare`);
+  }
 
   const setCookieHeaders = res.headers.raw()['set-cookie'] ?? [];
   const parsed = parseCookies(setCookieHeaders);
@@ -40,7 +48,7 @@ async function fetchCookie() {
   }
 
   cookieJar = parsed;
-  console.log('[*] Cookie fetched (access_token_web obtained).');
+  console.log('[*] Cookie fetched.');
 }
 
 function buildCookieHeader(jar) {
@@ -53,16 +61,17 @@ function buildCookieHeader(jar) {
 async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
   if (!cookieJar) await fetchCookie();
 
-  const params = new URLSearchParams({
-    order: 'newest_first',
-    per_page: String(perPage),
-    page: String(page),
-    'status_ids[]': '6', // 6 = For Sale on Vinted (excludes sold/reserved)
-  });
-  if (brandId) params.set('brand_ids', String(brandId));
-  if (query)   params.set('search_text', query);
+  // Build query string manually so status_ids[] uses literal brackets (not %5B%5D)
+  const parts = [
+    `order=newest_first`,
+    `per_page=${perPage}`,
+    `page=${page}`,
+    `status_ids[]=6`,   // 6 = For Sale on Vinted
+  ];
+  if (brandId) parts.push(`brand_ids=${brandId}`);
+  if (query)   parts.push(`search_text=${encodeURIComponent(query)}`);
 
-  const url = `https://www.vinted.fr/api/v2/catalog/items?${params}`;
+  const url = `https://www.vinted.fr/api/v2/catalog/items?${parts.join('&')}`;
 
   const res = await fetch(url, {
     headers: {
@@ -72,6 +81,13 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
       'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
     },
   });
+
+  // Cloudflare/Datadome returns an HTML page when blocking — detect and throw clearly
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    cookieJar = null; // force fresh cookie next attempt
+    throw new Error(`Vinted returned non-JSON (${res.status}) — likely rate-limited`);
+  }
 
   const data = await res.json();
 
@@ -90,7 +106,7 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
   };
 }
 
-// Fetch all pages up to maxPages (default: all)
+// Fetch all pages up to maxPages (default: 1)
 async function search({ brandId, query, perPage = 96, maxPages = 1 } = {}) {
   const first = await searchPage({ brandId, query, perPage, page: 1 });
   const allItems = [...first.items];
@@ -98,7 +114,7 @@ async function search({ brandId, query, perPage = 96, maxPages = 1 } = {}) {
   const pagesToFetch = Math.min(maxPages, first.totalPages);
 
   for (let page = 2; page <= pagesToFetch; page++) {
-    await new Promise((r) => setTimeout(r, 800)); // polite delay
+    await new Promise((r) => setTimeout(r, 800));
     const result = await searchPage({ brandId, query, perPage, page });
     allItems.push(...result.items);
   }
