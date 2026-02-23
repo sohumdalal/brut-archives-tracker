@@ -57,6 +57,7 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
     order: 'newest_first',
     per_page: String(perPage),
     page: String(page),
+    'status_ids[]': '6', // 6 = For Sale on Vinted (excludes sold/reserved)
   });
   if (brandId) params.set('brand_ids', String(brandId));
   if (query)   params.set('search_text', query);

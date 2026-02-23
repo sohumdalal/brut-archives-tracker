@@ -27,6 +27,9 @@ function isNonClothing(title) {
 }
 
 function isBrutItem(item) {
+  // Must be visible/active (belt-and-suspenders alongside the status_ids API filter)
+  if (item.is_visible === false) return false;
+
   const title = (item.title ?? '').toLowerCase();
   const brand = (item.brand_title ?? '').toLowerCase();
 
