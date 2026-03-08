@@ -1,40 +1,24 @@
-# vinted-brut-notifier
+# brut-archives-tracker
 
-Polls Vinted every 5 minutes for new listings matching Brut Archives / Brut Paris / Brut Clothing and sends an email notification when something new drops.
+Aggregates Brut Archives listings from Vinted (.com, .co.uk, .fr), Grailed, Depop, and eBay. Polls every 5 minutes and surfaces new listings in a simple frontend at `localhost:3000`.
 
-> **Run this locally, not on a cloud host.** Vinted's bot protection (Cloudflare/Datadome) blocks requests from datacenter IPs (Railway, Render, Fly.io, etc.). A home IP works fine.
+> **Run this locally, not on a cloud host.** Vinted and Depop's bot protection blocks datacenter IPs. A home IP works fine.
 
 ## Setup
 
 ```bash
 npm install
+npx playwright install chromium   # for Depop scraper
 cp .env.example .env
-# Fill in your Gmail credentials in .env
+# edit .env if needed
+node index.js
 ```
 
-## Gmail App Password
-
-You need a Gmail **App Password** (not your regular password):
-
-1. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-2. Select "Mail" + "Mac" (or any device)
-3. Copy the 16-character password into `.env`
-
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `GMAIL_USER` | — | Your Gmail address |
-| `GMAIL_APP_PASSWORD` | — | 16-char Gmail App Password |
-| `NOTIFY_EMAIL` | — | Where to send alerts (can be same as above) |
-| `POLL_INTERVAL_MINUTES` | `5` | How often to poll Vinted |
-| `POLL_PAGES` | `2` | Pages per query (96 items/page) |
-
-## Running 24/7 locally with pm2
+## Running 24/7 with pm2
 
 ```bash
 npm install -g pm2
-pm2 start index.js --name vinted-notifier
+pm2 start index.js --name brut-tracker
 pm2 save
 pm2 startup   # follow the printed command to auto-start on reboot
 ```
@@ -42,20 +26,45 @@ pm2 startup   # follow the printed command to auto-start on reboot
 Useful commands:
 
 ```bash
-pm2 logs vinted-notifier     # live logs
-pm2 status                   # check running status
-pm2 restart vinted-notifier  # restart
-pm2 stop vinted-notifier     # stop
+pm2 logs brut-tracker     # live logs
+pm2 status                # check running status
+pm2 restart brut-tracker  # restart
+pm2 stop brut-tracker     # stop
 ```
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `POLL_INTERVAL_MINUTES` | `5` | How often to poll all platforms |
+| `EBAY_CLIENT_ID` | — | eBay Browse API client ID (free at developer.ebay.com) |
+| `EBAY_CLIENT_SECRET` | — | eBay Browse API client secret |
+
+eBay credentials are optional — the scraper skips gracefully until they're added.
 
 ## Project structure
 
 ```
 src/
-  config.js         # search queries, filter logic, env vars
-  email.js          # nodemailer (Gmail SMTP port 587)
-  poller.js         # poll loop, cron schedule, seen.json deduplication
+  config.js          # query string, poll interval
+  db.js              # JSON file store (items.json), insert + query
+  poller.js          # cron loop, runs all scrapers
+  server.js          # Express — serves frontend + /api/items
   scrapers/
-    vinted.js       # Vinted API client (cookie auth, pagination)
-seen.json           # auto-generated, tracks already-seen item IDs
+    vinted.js        # Vinted API (.com, .co.uk, .fr in parallel)
+    grailed.js       # Grailed via Algolia search API
+    depop.js         # Depop via Playwright (headless Chrome)
+    ebay.js          # eBay Browse API (OAuth2, skips if no credentials)
+public/
+  index.html         # frontend — card grid, platform filters, sort
+items.json           # auto-generated, persists seen listings
 ```
+
+## Platform notes
+
+| Platform | Method | Auth |
+|---|---|---|
+| Vinted | Internal API | Anonymous cookie (JWT) |
+| Grailed | Algolia search API | Public search-only key |
+| Depop | Playwright (headless Chrome) | None — bypasses bot detection |
+| eBay | Browse API (official) | OAuth2 app token (free tier) |
