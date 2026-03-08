@@ -155,8 +155,12 @@ async function search(query) {
       // Skip invisible listings
       if (item.is_visible === false) return false;
 
-      // Skip non-clothing items by title keyword
       const title = (item.title ?? '').toLowerCase();
+
+      // Must have "brut archives" in the title
+      if (!title.includes('brut archives')) return false;
+
+      // Skip non-clothing items
       if (NON_CLOTHING_KEYWORDS.some((kw) => title.includes(kw))) return false;
 
       return true;
