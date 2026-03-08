@@ -10,6 +10,15 @@ const fetch = require('node-fetch');
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
+// Items whose title contains any of these terms are not clothing and should be skipped.
+const NON_CLOTHING_KEYWORDS = [
+  'pendentif', 'bougeoir', 'déodorant', 'deodorant', 'désodorisant',
+  'desodorizante', 'after shave', 'aftershave', 'eau de toilette',
+  'parfum', 'cologne', 'savon', 'spray', 'champagne', 'présentoir',
+  'presentoir', 'opale', 'diamant', 'cuarzo', 'meuble', 'speaker',
+  'lampe', 'bougie', 'chandelle', 'bois brut', 'coeur en brut',
+];
+
 // Vinted now uses JWT-based cookies instead of the old session cookie
 let cookieJar = null;
 
@@ -57,8 +66,8 @@ function buildCookieHeader(jar) {
     .join('; ');
 }
 
-// opts: { brandId, query, perPage, page }
-async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
+// opts: { query, perPage, page }
+async function searchPage({ query, perPage = 96, page = 1 } = {}) {
   if (!cookieJar) await fetchCookie();
 
   // Build query string manually so status_ids[] uses literal brackets (not %5B%5D)
@@ -68,8 +77,7 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
     `page=${page}`,
     `status_ids[]=6`,   // 6 = For Sale on Vinted
   ];
-  if (brandId) parts.push(`brand_ids=${brandId}`);
-  if (query)   parts.push(`search_text=${encodeURIComponent(query)}`);
+  if (query) parts.push(`search_text=${encodeURIComponent(query)}`);
 
   const url = `https://www.vinted.fr/api/v2/catalog/items?${parts.join('&')}`;
 
@@ -96,7 +104,7 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
     console.log('[*] Session expired — refreshing cookie...');
     cookieJar = null;
     await fetchCookie();
-    return searchPage({ brandId, query, perPage, page });
+    return searchPage({ query, perPage, page });
   }
 
   return {
@@ -106,20 +114,64 @@ async function searchPage({ brandId, query, perPage = 96, page = 1 } = {}) {
   };
 }
 
-// Fetch all pages up to maxPages (default: 1)
-async function search({ brandId, query, perPage = 96, maxPages = 1 } = {}) {
-  const first = await searchPage({ brandId, query, perPage, page: 1 });
+// Internal: fetch all pages up to maxPages and return raw items + pagination metadata.
+async function searchVinted({ query, perPage = 96, maxPages = 1 } = {}) {
+  const first = await searchPage({ query, perPage, page: 1 });
   const allItems = [...first.items];
 
   const pagesToFetch = Math.min(maxPages, first.totalPages);
 
   for (let page = 2; page <= pagesToFetch; page++) {
     await new Promise((r) => setTimeout(r, 800));
-    const result = await searchPage({ brandId, query, perPage, page });
+    const result = await searchPage({ query, perPage, page });
     allItems.push(...result.items);
   }
 
   return { items: allItems, totalPages: first.totalPages, totalEntries: first.totalEntries };
+}
+
+/**
+ * Public API: search Vinted for `query` and return an array of normalized items.
+ * Uses 2 pages of 96 results each.
+ *
+ * @param {string} query
+ * @returns {Promise<Array<{
+ *   id: string,
+ *   platform: string,
+ *   title: string,
+ *   price: string|null,
+ *   currency: string|null,
+ *   imageUrl: string|null,
+ *   itemUrl: string,
+ *   size: string|null,
+ *   condition: null,
+ * }>>}
+ */
+async function search(query) {
+  const { items } = await searchVinted({ query, perPage: 96, maxPages: 2 });
+
+  return items
+    .filter((item) => {
+      // Skip invisible listings
+      if (item.is_visible === false) return false;
+
+      // Skip non-clothing items by title keyword
+      const title = (item.title ?? '').toLowerCase();
+      if (NON_CLOTHING_KEYWORDS.some((kw) => title.includes(kw))) return false;
+
+      return true;
+    })
+    .map((item) => ({
+      id: `vinted:${item.id}`,
+      platform: 'vinted',
+      title: item.title ?? '',
+      price: item.price?.amount ?? null,
+      currency: item.price?.currency_code ?? null,
+      imageUrl: item.photo?.url ?? null,
+      itemUrl: item.url,
+      size: item.size_title ?? null,
+      condition: null, // Vinted does not expose condition in search results
+    }));
 }
 
 module.exports = { search, fetchCookie };
