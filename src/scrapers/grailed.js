@@ -6,27 +6,33 @@ const fetch = require('node-fetch');
 
 const ALGOLIA_APP_ID = 'MNRWEFSS2Q';
 const ALGOLIA_API_KEY = 'c89dbaddf15fe70e1941a109bf7c2a3d';
-const ALGOLIA_INDEX = 'Listing_by_date_added_production';
+// Listing_by_heat_production is the active index (date_added index returns 0 results)
+const ALGOLIA_INDEX = 'Listing_by_heat_production';
 
 const ALGOLIA_URL = `https://${ALGOLIA_APP_ID}.algolia.net/1/indexes/${ALGOLIA_INDEX}/query`;
 
-function normalizeHit(hit) {
-  const imageUrl = hit.photos?.[0]?.url ?? null;
+const CONDITION_MAP = {
+  is_not_worn:     'New / Not Worn',
+  is_gently_used:  'Gently Used',
+  is_used:         'Used',
+  is_worn:         'Worn',
+};
 
-  const itemUrl = hit.slug
-    ? `https://www.grailed.com/listings/${hit.id}-${hit.slug}`
-    : `https://www.grailed.com/listings/${hit.id}`;
+function normalizeHit(hit) {
+  const imageUrl = hit.cover_photo?.image_url ?? hit.cover_photo?.url ?? null;
+  const itemUrl  = `https://www.grailed.com/listings/${hit.id}`;
+  const condition = CONDITION_MAP[hit.condition] ?? hit.condition ?? null;
 
   return {
-    id: `grailed:${hit.id}`,
-    platform: 'grailed',
-    title: String(hit.title ?? ''),
-    price: Number(hit.price ?? 0).toFixed(2),
-    currency: 'USD',
+    id:        `grailed:${hit.id}`,
+    platform:  'grailed',
+    title:     String(hit.title ?? ''),
+    price:     Number(hit.price ?? 0).toFixed(2),
+    currency:  'USD',
     imageUrl,
     itemUrl,
-    size: hit.size ?? null,
-    condition: hit.condition ?? null,
+    size:      hit.size ?? null,
+    condition,
   };
 }
 
@@ -41,7 +47,7 @@ async function search(query) {
     body: JSON.stringify({
       query,
       hitsPerPage: 48,
-      filters: 'sold:false',
+      filters: 'NOT sold:true',
     }),
   });
 
