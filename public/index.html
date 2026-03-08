@@ -134,6 +134,32 @@
       border-color: var(--accent);
     }
 
+    .filter-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .sort-select {
+      flex-shrink: 0;
+      appearance: none;
+      background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23111' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 30px 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      cursor: pointer;
+      outline: none;
+      white-space: nowrap;
+    }
+
+    .sort-select:hover {
+      border-color: var(--accent);
+    }
+
     /* ── Main content ── */
     main {
       padding: 28px 24px 48px;
@@ -360,13 +386,20 @@
         <span class="updated-at" id="updated-at">—</span>
       </div>
     </div>
-    <nav class="filter-bar" id="filter-bar">
-      <button class="filter-btn active" data-platform="all">All</button>
-      <button class="filter-btn" data-platform="vinted">Vinted</button>
-      <button class="filter-btn" data-platform="ebay">eBay</button>
-      <button class="filter-btn" data-platform="grailed">Grailed</button>
-      <button class="filter-btn" data-platform="depop">Depop</button>
-    </nav>
+    <div class="filter-row">
+      <nav class="filter-bar" id="filter-bar">
+        <button class="filter-btn active" data-platform="all">All</button>
+        <button class="filter-btn" data-platform="vinted">Vinted</button>
+        <button class="filter-btn" data-platform="ebay">eBay</button>
+        <button class="filter-btn" data-platform="grailed">Grailed</button>
+        <button class="filter-btn" data-platform="depop">Depop</button>
+      </nav>
+      <select class="sort-select" id="sort-select">
+        <option value="newest">Newest</option>
+        <option value="price-asc">Price: Low → High</option>
+        <option value="price-desc">Price: High → Low</option>
+      </select>
+    </div>
   </header>
 
   <main>
@@ -376,8 +409,10 @@
   <script>
     // ── State ────────────────────────────────────────────────────────────────
     let currentPlatform = 'all';
-    let lastFetchedAt = null;
-    let updatedAtTimer = null;
+    let currentSort     = 'newest';
+    let cachedItems     = [];
+    let lastFetchedAt   = null;
+    let updatedAtTimer  = null;
     let autoRefreshTimer = null;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -414,6 +449,18 @@
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+    }
+
+    // ── Sort ─────────────────────────────────────────────────────────────────
+    function sortItems(items) {
+      const sorted = [...items];
+      if (currentSort === 'price-asc') {
+        sorted.sort((a, b) => (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0));
+      } else if (currentSort === 'price-desc') {
+        sorted.sort((a, b) => (parseFloat(b.price) || 0) - (parseFloat(a.price) || 0));
+      }
+      // 'newest' is already found_at DESC from the API — no sort needed
+      return sorted;
     }
 
     // ── Render ───────────────────────────────────────────────────────────────
@@ -500,7 +547,7 @@
       }
 
       countEl.textContent = `${items.length} listing${items.length !== 1 ? 's' : ''}`;
-      grid.innerHTML = items.map(renderCard).join('');
+      grid.innerHTML = sortItems(items).map(renderCard).join('');
     }
 
     // ── Updated-at ticker ─────────────────────────────────────────────────────
@@ -522,8 +569,9 @@
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        cachedItems = data;
         lastFetchedAt = Date.now();
-        render(data);
+        render(cachedItems);
         startUpdatedAtTicker();
       } catch (err) {
         console.error('Fetch error:', err);
@@ -545,6 +593,12 @@
       // Reset auto-refresh timer so it counts from this fetch
       clearInterval(autoRefreshTimer);
       autoRefreshTimer = setInterval(() => fetchItems(currentPlatform), 60_000);
+    });
+
+    // ── Sort select ───────────────────────────────────────────────────────────
+    document.getElementById('sort-select').addEventListener('change', (e) => {
+      currentSort = e.target.value;
+      render(cachedItems);
     });
 
     // ── Boot ──────────────────────────────────────────────────────────────────
