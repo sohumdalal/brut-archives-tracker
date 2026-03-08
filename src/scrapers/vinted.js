@@ -1,16 +1,15 @@
-/**
- * Minimal Vinted API client.
- * The `vinted-api` npm package has a bug where it passes the cookie module
- * object as the cookie header value instead of the actual session string.
- * This replaces it with a correct implementation.
- */
-
 const fetch = require('node-fetch');
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 
-// Items whose title contains any of these terms are not clothing and should be skipped.
+// All three Vinted markets — items are per-domain and don't overlap
+const DOMAINS = [
+  { host: 'www.vinted.com',   lang: 'en-US,en;q=0.9',               slug: 'com' },
+  { host: 'www.vinted.co.uk', lang: 'en-GB,en;q=0.9,en-US;q=0.8',  slug: 'uk'  },
+  { host: 'www.vinted.fr',    lang: 'fr-FR,fr;q=0.9,en-US;q=0.8',  slug: 'fr'  },
+];
+
 const NON_CLOTHING_KEYWORDS = [
   'pendentif', 'bougeoir', 'déodorant', 'deodorant', 'désodorisant',
   'desodorizante', 'after shave', 'aftershave', 'eau de toilette',
@@ -19,8 +18,8 @@ const NON_CLOTHING_KEYWORDS = [
   'lampe', 'bougie', 'chandelle', 'bois brut', 'coeur en brut',
 ];
 
-// Vinted now uses JWT-based cookies instead of the old session cookie
-let cookieJar = null;
+// Per-domain cookie jars
+const cookieJars = {};
 
 function parseCookies(setCookieHeaders) {
   const jar = {};
@@ -28,154 +27,143 @@ function parseCookies(setCookieHeaders) {
     const [pair] = header.split(';');
     const eq = pair.indexOf('=');
     if (eq === -1) continue;
-    const name = pair.slice(0, eq).trim();
+    const name  = pair.slice(0, eq).trim();
     const value = pair.slice(eq + 1).trim();
     if (value) jar[name] = value;
   }
   return jar;
 }
 
-async function fetchCookie() {
-  const res = await fetch('https://www.vinted.fr', {
+async function fetchCookieForDomain({ host, lang }) {
+  const res = await fetch(`https://${host}`, {
     headers: {
-      'user-agent': USER_AGENT,
-      accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+      'user-agent':      USER_AGENT,
+      accept:            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'accept-language': lang,
     },
     redirect: 'follow',
   });
 
   if (!res.ok) {
-    throw new Error(`Vinted homepage returned ${res.status} — likely rate-limited by Cloudflare`);
+    throw new Error(`${host} homepage returned ${res.status} — likely rate-limited by Cloudflare`);
   }
 
   const setCookieHeaders = res.headers.raw()['set-cookie'] ?? [];
   const parsed = parseCookies(setCookieHeaders);
 
   if (!parsed['access_token_web']) {
-    throw new Error('Could not find access_token_web cookie in Vinted response.');
+    throw new Error(`Could not find access_token_web cookie on ${host}`);
   }
 
-  cookieJar = parsed;
-  console.log('[*] Cookie fetched.');
+  cookieJars[host] = parsed;
+  console.log(`[vinted] Cookie fetched for ${host}`);
 }
 
 function buildCookieHeader(jar) {
-  return Object.entries(jar)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('; ');
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
-// opts: { query, perPage, page }
-async function searchPage({ query, perPage = 96, page = 1 } = {}) {
-  if (!cookieJar) await fetchCookie();
+async function searchPage(domain, { query, perPage = 96, page = 1 } = {}) {
+  const { host, lang } = domain;
 
-  // Build query string manually so status_ids[] uses literal brackets (not %5B%5D)
+  if (!cookieJars[host]) await fetchCookieForDomain(domain);
+
   const parts = [
     `order=newest_first`,
     `per_page=${perPage}`,
     `page=${page}`,
-    `status_ids[]=6`,   // 6 = For Sale on Vinted
+    `status_ids[]=6`,
   ];
   if (query) parts.push(`search_text=${encodeURIComponent(query)}`);
 
-  const url = `https://www.vinted.fr/api/v2/catalog/items?${parts.join('&')}`;
+  const url = `https://${host}/api/v2/catalog/items?${parts.join('&')}`;
 
   const res = await fetch(url, {
     headers: {
-      cookie: buildCookieHeader(cookieJar),
-      'user-agent': USER_AGENT,
-      accept: 'application/json, text/plain, */*',
-      'accept-language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+      cookie:            buildCookieHeader(cookieJars[host]),
+      'user-agent':      USER_AGENT,
+      accept:            'application/json, text/plain, */*',
+      'accept-language': lang,
     },
   });
 
-  // Cloudflare/Datadome returns an HTML page when blocking — detect and throw clearly
   const contentType = res.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
-    // IP is rate-limited by Cloudflare — the cookie is still valid, don't reset it
-    throw new Error(`Vinted returned non-JSON (${res.status}) — likely rate-limited`);
+    throw new Error(`${host} returned non-JSON (${res.status}) — likely rate-limited`);
   }
 
   const data = await res.json();
 
-  // If the session expired, refresh and retry once
+  // Session expired — refresh and retry once
   if (data.code === 100 || data.message_code === 'invalid_authentication_token') {
-    console.log('[*] Session expired — refreshing cookie...');
-    cookieJar = null;
-    await fetchCookie();
-    return searchPage({ query, perPage, page });
+    console.log(`[vinted] Session expired on ${host} — refreshing cookie...`);
+    cookieJars[host] = null;
+    await fetchCookieForDomain(domain);
+    return searchPage(domain, { query, perPage, page });
   }
 
   return {
-    items: data.items ?? [],
-    totalPages: data.pagination?.total_pages ?? 1,
+    items:        data.items ?? [],
+    totalPages:   data.pagination?.total_pages ?? 1,
     totalEntries: data.pagination?.total_entries ?? 0,
   };
 }
 
-// Internal: fetch all pages up to maxPages and return raw items + pagination metadata.
-async function searchVinted({ query, perPage = 96, maxPages = 1 } = {}) {
-  const first = await searchPage({ query, perPage, page: 1 });
+async function searchOneDomain(domain, query) {
+  const first    = await searchPage(domain, { query, perPage: 96, page: 1 });
   const allItems = [...first.items];
+  const pages    = Math.min(2, first.totalPages);
 
-  const pagesToFetch = Math.min(maxPages, first.totalPages);
-
-  for (let page = 2; page <= pagesToFetch; page++) {
+  for (let page = 2; page <= pages; page++) {
     await new Promise((r) => setTimeout(r, 800));
-    const result = await searchPage({ query, perPage, page });
+    const result = await searchPage(domain, { query, perPage: 96, page });
     allItems.push(...result.items);
   }
 
-  return { items: allItems, totalPages: first.totalPages, totalEntries: first.totalEntries };
+  return allItems;
 }
 
-/**
- * Public API: search Vinted for `query` and return an array of normalized items.
- * Uses 2 pages of 96 results each.
- *
- * @param {string} query
- * @returns {Promise<Array<{
- *   id: string,
- *   platform: string,
- *   title: string,
- *   price: string|null,
- *   currency: string|null,
- *   imageUrl: string|null,
- *   itemUrl: string,
- *   size: string|null,
- *   condition: null,
- * }>>}
- */
+function isValidItem(item) {
+  if (item.is_visible === false) return false;
+  const title = (item.title ?? '').toLowerCase();
+  if (!title.includes('brut archives')) return false;
+  if (NON_CLOTHING_KEYWORDS.some((kw) => title.includes(kw))) return false;
+  return true;
+}
+
+function normalizeItem(item, domainSlug) {
+  return {
+    id:        `vinted-${domainSlug}:${item.id}`,
+    platform:  'vinted',
+    title:     item.title ?? '',
+    price:     item.price?.amount ?? null,
+    currency:  item.price?.currency_code ?? null,
+    imageUrl:  item.photo?.url ?? null,
+    itemUrl:   item.url,
+    size:      item.size_title ?? null,
+    condition: null,
+  };
+}
+
 async function search(query) {
-  const { items } = await searchVinted({ query, perPage: 96, maxPages: 2 });
+  // Search all three domains in parallel — each has independent inventory
+  const results = await Promise.allSettled(
+    DOMAINS.map((domain) => searchOneDomain(domain, query))
+  );
 
-  return items
-    .filter((item) => {
-      // Skip invisible listings
-      if (item.is_visible === false) return false;
+  const items = [];
+  for (let i = 0; i < DOMAINS.length; i++) {
+    const { status, value, reason } = results[i];
+    if (status === 'rejected') {
+      console.warn(`[vinted] ${DOMAINS[i].host} skipped: ${reason.message}`);
+      continue;
+    }
+    for (const item of value) {
+      if (isValidItem(item)) items.push(normalizeItem(item, DOMAINS[i].slug));
+    }
+  }
 
-      const title = (item.title ?? '').toLowerCase();
-
-      // Must have "brut archives" in the title
-      if (!title.includes('brut archives')) return false;
-
-      // Skip non-clothing items
-      if (NON_CLOTHING_KEYWORDS.some((kw) => title.includes(kw))) return false;
-
-      return true;
-    })
-    .map((item) => ({
-      id: `vinted:${item.id}`,
-      platform: 'vinted',
-      title: item.title ?? '',
-      price: item.price?.amount ?? null,
-      currency: item.price?.currency_code ?? null,
-      imageUrl: item.photo?.url ?? null,
-      itemUrl: item.url,
-      size: item.size_title ?? null,
-      condition: null, // Vinted does not expose condition in search results
-    }));
+  return items;
 }
 
-module.exports = { search, fetchCookie };
+module.exports = { search };
