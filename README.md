@@ -60,6 +60,13 @@ public/
 items.json           # auto-generated, persists seen listings
 ```
 
+## To-do
+
+- [ ] **Refresh animation** — smooth the feed update so new rows fade/slide in instead of a hard re-render
+- [ ] **UI density** — reduce side padding, make feed rows more boxy/square
+- [ ] **Size filter** — add a size selector to the filter bar so you can narrow results to your size across all platforms
+- [ ] **Multi-brand input** — let the user type in any brand name (not just Brut Archives) and have all scrapers search for it dynamically across Vinted, Grailed, Depop, and eBay
+
 ## Platform notes
 
 | Platform | Method | Auth |
